@@ -1,0 +1,73 @@
+# 이미지 크기 절약 + 시크릿 차단
+
+# git / scm
+.git
+.gitignore
+.gitattributes
+.github/
+
+# python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv
+venv
+env
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# secrets / 로컬 데이터 — 이미지에 절대 포함 X
+.env
+.env.*
+!.env.example
+*.session
+KIS_TOKEN
+KIS20*
+**/firebase-service-account*.json
+secrets/
+
+# 데이터 / 백업 (volume 마운트로 처리)
+data/
+backups/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.xlsx
+*.parquet
+
+# 로그
+*.log
+server.log*
+importtime_*.log
+nohup.out
+
+# scratch / 실험 코드
+scratch/
+plans/
+
+# frontend (별도 빌드 / Vercel)
+dashboard/
+
+# docs (필요한 README 만 ! 로 화이트리스트)
+*.md
+!README.md
+!CLAUDE.md
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
+
+# Docker
+docker-compose.override.yml
+
+# Tmp
+tmp/
+.cache/

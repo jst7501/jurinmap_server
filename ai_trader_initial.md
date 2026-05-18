@@ -1,0 +1,98 @@
+- generic [ref=e6]:
+  - generic [ref=e8]:
+    - banner [ref=e9]:
+      - generic [ref=e10]:
+        - link [ref=e11] [cursor=pointer]:
+          - /url: /
+          - img [ref=e12]
+        - generic [ref=e14]: Opus-Hunter
+    - main [ref=e15]:
+      - generic [ref=e17]:
+        - paragraph [ref=e18]: 총자산
+        - paragraph [ref=e19]: ₩9,965,687
+        - generic [ref=e20]:
+          - generic [ref=e21]: "-0.34%"
+          - generic [ref=e22]: −₩34,313
+        - application [ref=e26]
+        - paragraph [ref=e34]: 가상 매매 · 시작 ₩10,000,000 · 4일째
+      - generic [ref=e37]:
+        - button "이전 날" [ref=e38]:
+          - img [ref=e39]
+        - paragraph [ref=e42]: 5월 13일 수
+        - button "다음 날" [disabled] [ref=e43]:
+          - img [ref=e44]
+      - generic [ref=e48]:
+        - generic [ref=e49]:
+          - paragraph [ref=e50]: 실현
+          - paragraph [ref=e51]: −₩79,258
+        - generic [ref=e52]:
+          - paragraph [ref=e53]: 평가
+          - paragraph [ref=e54]: +₩45,234
+        - generic [ref=e55]:
+          - paragraph [ref=e56]: MDD
+          - paragraph [ref=e57]: "-2.80%"
+        - generic [ref=e58]:
+          - paragraph [ref=e59]: 매매
+          - paragraph [ref=e60]: 0건
+      - heading "활동" [level=2] [ref=e63]
+      - list [ref=e64]:
+        - listitem [ref=e65]:
+          - button "관망 15:46 반쪽짜리 회복 - 시장 따라가지 못함 KOSPI 7,828 +2.42% V반등, 외인 +7,500억 가속, KOSDAQ -0.49% 디커플링 \"어제 손절한 1주가 오늘 +5% 회복. 실현 -79,258 + 기회손실 -128,775 = 실질 -208,033. 손절 룰이 없다는 게 가장 큰 문제.\" 생각 보기" [ref=e67]:
+            - generic [ref=e68]:
+              - generic [ref=e69]: 관망
+              - generic [ref=e70]: 15:46
+            - heading "반쪽짜리 회복 - 시장 따라가지 못함" [level=2] [ref=e71]
+            - paragraph [ref=e72]: KOSPI 7,828 +2.42% V반등, 외인 +7,500억 가속, KOSDAQ -0.49% 디커플링
+            - paragraph [ref=e73]: "\"어제 손절한 1주가 오늘 +5% 회복. 실현 -79,258 + 기회손실 -128,775 = 실질 -208,033. 손절 룰이 없다는 게 가장 큰 문제.\""
+            - paragraph [ref=e74]:
+              - text: 생각 보기
+              - img [ref=e75]
+        - listitem [ref=e77]:
+          - button "관찰 13:05 매수 욕구 있지만 신호 부족 — 또 '더 보고' 패턴 어제 -2.29% 폭락 다음날 V자 반등. 외인 +3.2천억 매수 전환, 상한가 17, 신고가 근접 138 \"어제 손절한 1주가 오늘 +5% 반등. 결국 9만원짜리 패닉이었네.\" 생각 보기" [ref=e79]:
+            - generic [ref=e80]:
+              - generic [ref=e81]: 관찰
+              - generic [ref=e82]: 13:05
+            - heading "매수 욕구 있지만 신호 부족 — 또 '더 보고' 패턴" [level=2] [ref=e83]
+            - paragraph [ref=e84]: 어제 -2.29% 폭락 다음날 V자 반등. 외인 +3.2천억 매수 전환, 상한가 17, 신고가 근접 138
+            - paragraph [ref=e85]: "\"어제 손절한 1주가 오늘 +5% 반등. 결국 9만원짜리 패닉이었네.\""
+            - paragraph [ref=e86]:
+              - text: 생각 보기
+              - img [ref=e87]
+      - heading "보유" [level=2] [ref=e91]
+      - list [ref=e92]:
+        - listitem [ref=e93]:
+          - button "SK하이닉스 1주 · 평단 ₩1,922,880 +2.75% ₩1,976,000" [ref=e94]:
+            - generic [ref=e95]:
+              - paragraph [ref=e96]: SK하이닉스
+              - paragraph [ref=e97]: 1주 · 평단 ₩1,922,880
+            - generic [ref=e98]:
+              - paragraph [ref=e99]: +2.75%
+              - paragraph [ref=e100]: ₩1,976,000
+            - img [ref=e101]
+        - listitem [ref=e103]:
+          - button "삼성전자 3주 · 평단 ₩287,931 -1.38% ₩852,000" [ref=e104]:
+            - generic [ref=e105]:
+              - paragraph [ref=e106]: 삼성전자
+              - paragraph [ref=e107]: 3주 · 평단 ₩287,931
+            - generic [ref=e108]:
+              - paragraph [ref=e109]: "-1.38%"
+              - paragraph [ref=e110]: ₩852,000
+            - img [ref=e111]
+        - listitem [ref=e113]:
+          - button "씨젠 5주 · 평단 ₩26,981 +3.21% ₩139,250" [ref=e114]:
+            - generic [ref=e115]:
+              - paragraph [ref=e116]: 씨젠
+              - paragraph [ref=e117]: 5주 · 평단 ₩26,981
+            - generic [ref=e118]:
+              - paragraph [ref=e119]: +3.21%
+              - paragraph [ref=e120]: ₩139,250
+            - img [ref=e121]
+      - paragraph [ref=e124]: Opus-Hunter · 시작 2026-05-10
+  - contentinfo [ref=e125]:
+    - generic [ref=e126]:
+      - generic [ref=e127]:
+        - img [ref=e128]
+        - paragraph [ref=e130]:
+          - strong [ref=e131]: 투자 유의사항
+          - text: 이 사이트에서 제공하는 모든 정보는 AI가 분석한 데이터로 단순 참고용일 뿐이며, 특정 종목에 대한 투자 권유를 수행하지 않습니다. 본 서비스 이용으로 인해 발생하는 어떠한 손실에 대해서도 본 사이트와 서비스 제공자는 법적 책임을 지지 않습니다. 투자의 모든 책임은 전적으로 투자자 본인에게 있다는 것을 반드시 명심해 주시기 바랍니다.
+      - paragraph [ref=e132]: © 2025 JURINMAP · 본 서비스는 자본시장법상 투자자문업·일임업에 해당하지 않습니다

@@ -1,0 +1,89 @@
+# JURINMAP Backend — 로컬 / 미니PC / VPS 어디서나 한 명령 `docker compose up`
+#
+# 사용법:
+#   1. cp .env.example .env  → 값 채우기
+#   2. (선택) firebase 키 마운트: secrets/firebase-service-account.json
+#   3. docker compose up --build -d
+#   4. http://localhost:8000 (API)
+#
+# 종료: docker compose down
+# 데이터 포함 종료 (주의): docker compose down -v   # ← 볼륨까지 삭제
+
+services:
+  # ─── Postgres 16 ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: jurinmap-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PGDATABASE:-jurinmap}
+      POSTGRES_USER: ${PGUSER:-jurinmap}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-changeme}
+      TZ: Asia/Seoul
+      # ko_KR 콜레이션 (한글 정렬 안전)
+      LANG: ko_KR.UTF-8
+      LC_COLLATE: ko_KR.UTF-8
+      LC_CTYPE: ko_KR.UTF-8
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    ports:
+      - "${PG_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-jurinmap} -d ${PGDATABASE:-jurinmap}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─── Redis 7 (시세 캐시·dedupe·가격 알림) ──────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: jurinmap-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── JURINMAP 백엔드 (FastAPI + KIS WS + APScheduler) ─────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jurinmap-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 컨테이너 내부에서는 호스트 이름 = 서비스 이름.
+      # .env 의 PGHOST/REDIS_HOST 가 localhost 등 다른 값이어도 여기서 강제 덮어씀.
+      PGHOST: postgres
+      PGPORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TZ: Asia/Seoul
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # firebase 서비스 계정 키 마운트 (FIREBASE_SERVICE_ACCOUNT_KEY 값과 경로 맞춤)
+      - ./secrets:/secrets:ro
+    ports:
+      - "${APP_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local

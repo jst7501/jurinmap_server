@@ -1,0 +1,4 @@
+﻿# Vercel upload guard (when project root is repo root)
+/*
+!/dashboard/
+!/dashboard/**

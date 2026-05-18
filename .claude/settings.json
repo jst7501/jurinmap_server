@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./KIS_TOKEN)",
+      "Read(./KIS20260406)",
+      "Read(./*.session)",
+      "Read(./server.log)",
+      "Read(./server.log.*)",
+      "Read(./server.err.log)",
+      "Read(./importtime_*.log)",
+      "Read(./dashboard/.env)",
+      "Read(./dashboard/.env.*)",
+      "Read(./dashboard/build-*.log)",
+      "Read(./dashboard/build_*.log)",
+      "Read(./dashboard/lint_err.txt)",
+      "Read(./dashboard/node_modules/**)",
+      "Bash(curl*api/push/news*)",
+      "Bash(*--all-users*)",
+      "mcp__Claude_Preview__preview_start",
+      "mcp__Claude_Preview__preview_screenshot",
+      "mcp__Claude_Preview__*",
+      "mcp__Claude_in_Chrome__*",
+      "mcp__ccd_session_mgmt__*",
+      "mcp__mcp-registry__*"
+    ]
+  }
+}

@@ -1,0 +1,124 @@
+name: backend-ci
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - 'dashboard/**'
+      - 'docs/**'
+      - '**/*.md'
+      - 'scratch/**'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'dashboard/**'
+      - 'docs/**'
+      - '**/*.md'
+
+permissions:
+  contents: read
+
+jobs:
+  # ─── 빠른 lint/import 체크 (3분 이내) ──────────────────────
+  python-lint:
+    name: Python — lint·import
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install minimal deps for import smoke test
+        run: |
+          python -m pip install --upgrade pip
+          # 무거운 패키지(selenium·yfinance) 제외하고 핵심만 — import smoke 용
+          pip install fastapi uvicorn python-dotenv pydantic psycopg[binary] redis httpx
+
+      - name: Ruff lint (있으면)
+        run: |
+          pip install ruff
+          ruff check server/ scripts/ collectors/ scrapers/ calculators/ --output-format=github || true
+
+      - name: Syntax compile check
+        run: |
+          python -m compileall -q server/ scripts/ collectors/ scrapers/ calculators/
+
+  # ─── 도커 이미지 빌드 검증 (캐시 활용) ─────────────────────
+  docker-build:
+    name: Docker — build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push, BuildKit cache)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: jurinmap-backend:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — import app
+        run: |
+          docker run --rm \
+            -e PGHOST=localhost -e REDIS_HOST=localhost \
+            -e KIS_APP_KEY=ci -e KIS_APP_SECRET=ci \
+            jurinmap-backend:ci-${{ github.sha }} \
+            python -c "from server.app_server import app; print('app loaded:', app.title)"
+
+  # ─── docker-compose 통합 (postgres·redis 띄우고 헬스체크) ──
+  compose-smoke:
+    name: docker-compose — health
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: docker-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env (ci dummy values)
+        run: |
+          cp .env.example .env
+          # CI 더미 — 실제 키 안 씀, KIS API 호출만 안 하면 됨
+          sed -i 's/^KIS_APP_KEY=.*/KIS_APP_KEY=ci-dummy/' .env
+          sed -i 's/^KIS_APP_SECRET=.*/KIS_APP_SECRET=ci-dummy/' .env
+          sed -i 's/^PGPASSWORD=.*/PGPASSWORD=cipass/' .env
+
+      - name: Start stack
+        run: |
+          docker compose up -d --build
+          sleep 20
+
+      - name: Healthcheck — app endpoint
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/api/ops/metrics > /dev/null 2>&1; then
+              echo "✓ app healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "✗ app did not come up in 60s"
+          docker compose logs app
+          exit 1
+
+      - name: Stack status
+        if: always()
+        run: |
+          docker compose ps
+          docker compose logs --tail=50
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

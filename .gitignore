@@ -1,0 +1,86 @@
+# ─── Secrets — 절대 commit 금지 ──────────────────────────────
+.env
+.env.local
+.env.*.local
+*.session
+KIS_TOKEN
+KIS20*
+**/firebase-service-account*.json
+secrets/
+# 옛 KIS 시크릿 직접 박아두는 파일 — env 분리됐어도 안전 차단.
+# gitignore 는 인라인 주석 미지원 — 패턴은 반드시 단독 줄에.
+config/settings.py
+
+# ─── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+venv/
+.venv/
+env/
+ENV/
+
+# ─── Logs ────────────────────────────────────────────────────
+*.log
+server.log*
+importtime_*.log
+nohup.out
+logs/
+*.jsonl
+
+# ─── Tooling / Tmp 산출물 ────────────────────────────────────
+.playwright-mcp/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/scheduled-tasks/
+.claude/projects/
+
+# ─── Data / Backups ──────────────────────────────────────────
+data/
+backups/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.xlsx
+*.parquet
+
+# ─── Scratch / Experiments ───────────────────────────────────
+scratch/
+plans/
+
+# ─── Frontend (별도 repo 로 관리) ────────────────────────────
+dashboard/
+
+# ─── Build / Dist ────────────────────────────────────────────
+build/
+dist/
+*.tar.gz
+*.whl
+node_modules/
+
+# ─── OS / IDE ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+.ipynb_checkpoints/
+
+# ─── Cache / Tmp ─────────────────────────────────────────────
+.cache/
+tmp/
+*.pid
+
+# ─── Docker ──────────────────────────────────────────────────
+# (Dockerfile/docker-compose 는 commit. 단 override 는 로컬용)
+docker-compose.override.yml

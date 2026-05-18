@@ -1,0 +1,472 @@
+# 투자정보 — 프로젝트 가이드
+
+## 시점 컨텍스트 (필독 — AI/모델 사전학습 시점 의존 금지)
+
+**대한민국 현직 대통령: 이재명** (더불어민주당, 2025년 6월 취임)
+- 윤석열 전 대통령은 2025년 4월 4일 헌법재판소 탄핵 인용으로 파면됨
+- 뉴스 원문에서 "李대통령" "이 대통령" "대통령"으로만 표기된 경우 **반드시 "이재명 대통령"으로 해석**
+- 시황 브리핑·종목 요약·뉴스 헤드라인 어떤 산출물에도 절대로 "윤석열 대통령" 표기 금지
+- 한국 정부 = "이재명 정부" (윤석열 정부는 2025년 4월 이전 과거 사건 인용 시에만 사용 가능)
+
+## 프로젝트 개요
+한국 투자정보 대시보드. Python 백엔드(수집·스크래퍼·FastAPI 서버·푸시 봇) + React 대시보드.
+
+## 스택
+- **프론트엔드**: React 19 + Vite 8 + Tailwind v4 + Framer Motion 12 + Recharts / Lightweight Charts + React Router 7 + Firebase + Axios
+- **백엔드**: Python 3.11, FastAPI, Postgres (`server/db_compat.py`의 SQLite-방언 호환 셰임 경유 — 코드 다수가 `?` 플레이스홀더·`INSERT OR IGNORE` 등 SQLite 문법으로 작성돼 있어도 실제 저장은 PG), Uvicorn
+- **외부 API**: 한국투자증권(KIS), OpenDART, KRX, 네이버 증시/테마, pykrx
+
+## 디렉터리 맵
+- `dashboard/` — 프론트엔드 (React). 위젯 70+개가 `src/components/widgets`에 있음
+- `dashboard/src/views` — 라우트 단위 뷰
+- `server/` — FastAPI 서버 (`server/db/connections.py`가 PG 단일 진입점)
+- `collectors/` — 외부 API 원천 수집기
+- `scrapers/` — HTML 스크래퍼
+- `references/` — KIS 기준 참조 구현. `모듈.py` ↔ `chk_모듈.py` 페어 관습
+- `scripts/` — 일회성/정기 스크립트 (cron·APScheduler에서 호출)
+- `calculators/` — 기술 지표
+- `persona/` — AI 인격/요약
+- `scratch/` — 실험 코드 (정리 대상)
+
+## 프론트엔드 디자인 원칙 — 하네스 평가 기준
+
+생성된 UI는 **design-evaluator** 서브에이전트가 4축으로 평가. 가중치:
+
+| 축 | 가중치 | 기준 |
+|---|---|---|
+| 디자인 퀄리티 | 35% | 색/간격/타이포 위계의 전체 일관성 |
+| 오리지널리티 | 30% | AI 전형 패턴 회피 (아래 블랙리스트) |
+| 크래프트 | 20% | 반응형, 다크모드, 접근성, 애니메이션 적정성 |
+| 펑셔널리티 | 15% | 로딩/에러/빈 상태, 키보드, 터치 타겟 |
+
+### AI 전형 패턴 블랙리스트 (즉시 감점)
+- 보라↔파랑 그라디언트(`from-purple-* to-indigo-*`, `from-violet-* to-blue-*`) 배경
+- 흰 카드 + 둥근 모서리(`rounded-2xl`) + 그림자 조합 남발
+- 이모지를 강조 수단으로 반복 (🚀 ✨ 🎉 등)
+- 모든 제목에 그라디언트 텍스트
+- 센터 정렬된 히어로 + 큰 버튼 2개 템플릿
+- 동일 톤의 블루 계열만으로 모든 상태(정보/성공/경고) 표현
+
+### 위젯 일관 규칙
+- 카드 패딩: `p-5` (모바일) / `p-6` (md+) 통일. `.toss-card` 유틸이 이미 반영.
+- 헤더: **`DetailWidgetHeader`** — `english` + `accent` + `icon`(lucide) + `title` + `subtitle`. 이모지 string은 자동 무시됨.
+- 다크모드 페어: 모든 텍스트에 `dark:text-*` 명시
+- 데이터 없음 상태: 빈 div 금지, 명시적 placeholder 또는 skeleton
+
+### v2.4 디자인 시스템 (상세 페이지 레이어 참고)
+
+**Shell 토큰** (`index.css @theme`):
+- `--color-shell-bg: #FFFFFF` (body, 라이트)
+- `--color-shell-surface: #FFFFFF` (카드 — body와 동일, border로만 구분)
+- `--color-shell-inline: #F9FAFB` (강조 블록 — Trio row 배경)
+- `--color-shell-border: #E5E8EB`
+- 다크 페어: `-dark` suffix (`#181C23 / #252930 / #2E3138 / #31363F`)
+
+**`.toss-card` 유틸**:
+```
+bg-[shell-surface] + border 1px warm + rounded-[14px] + shadow 0
+```
+shadow는 라이트·다크 모두 **0**. 카드 간 구분은 `border` 1px만.
+
+**Trio row 패턴** (Hero + 대다수 위젯의 핵심 블록):
+```jsx
+<div className="rounded-[14px] overflow-hidden bg-[var(--color-shell-inline)]
+  grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x
+  divide-[var(--color-shell-border)]">
+  <TrioCell stripeClass="bg-toss-red" label="..." value="..." sub="..." />
+  ...
+</div>
+```
+- 각 row 좌측 3px 컬러 stripe
+- `font-mono tabular-nums` 수치
+- 라벨 11px bold uppercase, 수치 20-26px bold, 서브 11px bold
+
+**시그널 컬러 토큰** (의미 있는 강조만):
+- `toss-red #F04452` — 상승·위험
+- `toss-blue #3182F6` — 하락·정보
+- `toss-orange #FF6B35` — 경고·개인
+- `toss-purple #7238FF` — 기관·기타
+- 나머지는 `toss-gray-*` 스케일
+
+**타이포 스케일** (Hero가 최대, 위젯은 Hero 내부 Trio보다 작게):
+- Hero 현재가: `clamp(56px, 8vw, 112px)` — 뷰 전체 최대
+- Hero 판정: 24-32px semibold
+- 위젯 제목(DetailWidgetHeader title): 18-20px bold
+- Trio 수치: 20-26px bold
+- 본문·라벨: 11-14px bold/medium
+- `font-black`은 **사용 금지** (font-bold로 통일, 강조는 크기·컬러로)
+
+**font-weight 위계 (2026-04-22 사용자피드백 "굵은 글씨 눈 아파"):**
+| 레벨 | 용도 | weight |
+|---|---|---|
+| 1 | Hero 현재가·섹션 제목·판정 문장 | `font-bold` |
+| 2 | 위젯 제목(DetailWidgetHeader title)·Trio 수치·주요 숫자(font-mono tabular-nums) | `font-bold` |
+| 3 | 위젯 내 헤드라인·배지·uppercase 라벨 | `font-semibold` (예외적) |
+| 4 | 서브 라벨·본문 paragraph·설명 텍스트 | **`font-medium`** (기본) |
+| 5 | 발행 시각·출처·subdued 메타 | `font-medium` 유지 (색상으로 구분) |
+
+**금지**:
+- 11-13px 본문·라벨에 `font-bold` 사용 (레벨 4인데 weight 올라가면 시각 피로)
+- 한 카드 안에 `font-bold` 텍스트 5개 초과 (위계 붕괴 → 전부 외치기)
+- 주요 수치와 같은 크기의 라벨을 `font-bold`로 (수치 강조 효과 소멸)
+
+**허용**:
+- 수치는 `font-mono tabular-nums font-bold`로 강조 유지 (숫자는 굵어도 눈 피로 덜함)
+- 배지 내 글씨는 작은 사이즈(9-10px) + `font-bold` OK (pill 배경과 대비)
+
+**카피 톤** (v2.1 토스-light):
+- Hero 판정 문장: 데이터 앵커 + 짧은 친근 ("외국인이 7일 연속 매집 중이에요. 누적 +2,340억.")
+- 빈 상태·로딩: 친근 허용 ("데이터 수집 중이에요")
+- 이모지는 **전역 금지** (DetailWidgetHeader가 string 이모지 자동 무시)
+- 반복 라임 ("~했어요/~몰렸어요/~버티고 있어요") 과사용 금지
+
+**섹션 구조** (StockDetailView):
+- Hero (main 밖, 풀블리드 warm white)
+- CompanyAboutCard (Hero 아래, 접힘 기본 — `ai_summary.one_liner` 있을 때만 렌더)
+- main (`px-5 md:px-6`) → StickySectionIndex (데스크탑 좌측 세로, 모바일 상단 미니 탭)
+- 4섹션 (main/core/survival/lab = PRICE/FLOW/STATS/PRESSURE): `SectionCard` — 컬러 dot + 영문 번호 + 한국어 제목 + 질문형 서브라벨
+
+### 현재 한계 (사용자 피드백 인식됨)
+- **위계 부재**: 모든 위젯이 같은 디자인 언어로 평평함. "어느 게 가장 중요한지" 시각 표현 부족. Phase 1 개선 후보: 섹션별 "주인공 1개 → featured 다크 앵커, 나머지 조연 → gray accent + compact"
+
+## 금지 사항
+
+1. **전체 유저 푸시**: `/api/push/news` 등 전체 브로드캐스트 엔드포인트 호출 금지. 테스트는 반드시 사용자 본인 토큰 단일 타깃 (`scripts/debug_fcm_push.py --token <FULL>`).
+2. **미리보기 도구**: 메인 에이전트가 `preview_*` / `mcp__Claude_Preview__*` 호출 금지. UI 확인은 반드시 `design-evaluator` 서브에이전트의 Playwright 경로로만.
+3. **시크릿 파일 읽기**: `.env`, `KIS_TOKEN`, `KIS20260406`, `*.session`, `dashboard/.env*` 직접 Read 금지.
+4. **대용량 로그 전체 Read**: `server.log`, `server.log.1`, `importtime_*.log`, `dashboard/build-*.log`, `dashboard/lint_err.txt` 전체 로드 금지. 반드시 Grep으로 범위를 좁힐 것.
+
+## 워크플로우
+
+### 3-에이전트 루프 (Planner → Generator → Evaluator)
+
+**언제 어느 루프를 쓰나:**
+- **개선 루프 (Generator↔Evaluator)**: 이미 방향이 정해진 위젯의 결함 수정. 2~5회로 수렴.
+- **재설계 루프 (Planner→Generator↔Evaluator)**: 뷰 전체가 별로일 때, 구조·위계·정체성 재결정 필요할 때.
+- **카운슬 루프 (4 비평가 + 종합자)**: 단일 평가자로 잡히지 않는 고수준 이슈 — 주린이 이해도·창의성·의사결정 가치가 동시에 의심될 때. 큰 마일스톤·방향 점검에만.
+
+#### 개선 루프 (2인조)
+1. 메인 에이전트(Generator)가 위젯/뷰 수정
+2. `/evaluate <widget-path-or-route>` → `design-evaluator` 실행
+3. Playwright MCP 실측 + 4축 점수 + 레퍼런스 대비 서술 + 결함 리포트
+4. 실패 축 있으면 피드백대로 메인이 수정, 다시 평가
+5. 단일 위젯 3~5회, 전체 페이지 5~15회가 경험적 수렴 구간
+
+#### 재설계 루프 (3인조)
+1. `/plan <target-view> -- <purpose>` → `design-planner` 실행
+2. Planner가 `scratch/plans/<timestamp>_<topic>.md`에 스펙 저장
+   - 정체성, Hero 전략, 섹션 구조, 제거 리스트, 카피 톤, Generator 작업 큐, Evaluator 체크리스트
+3. 사용자가 스펙 승인 → Generator가 작업 큐 순서대로 구현
+4. 각 작업 단위 후 `/evaluate`로 검증, 통과 시 다음 단위
+5. 모든 큐 완료 후 Evaluator "레퍼런스 대비 서술"을 읽고 다음 재설계 루프 필요 여부 판단
+
+#### 카운슬 루프 (4 비평가 + 종합자)
+1. `/council <widget-path-or-route>` 호출
+2. **Round 1 (병렬)**: 4명이 독립적으로 평가
+   - `design-evaluator` — 4축 크래프트·블랙리스트·반응형 (기계 체크)
+   - `design-critic-newbie` — 주린이 페르소나. "이 용어 뭔 뜻?" "뭘 해야 되죠?" 이해도·행동 유도
+   - `design-critic-creative` — 기시감·오리지널리티. 대안 아이디어 최소 2개 제안
+   - `design-critic-analyst` — 10년차 투자자. 의사결정 가치·수치 맥락·한국 시장 컨텍스트
+3. **Round 2 (종합)**: `design-council-synthesizer`가 4개 리포트를 **합의 / 충돌 / 단독 주장**으로 정리 + 우선순위 액션 리스트
+4. 메인이 합의 이슈부터 수정 착수, 충돌 이슈는 사용자 결정 요청
+5. 재수정 후 일반적으로 `/evaluate`로 빠르게 확인 (카운슬 재호출은 큰 구조 변화 있을 때만)
+
+**카운슬 vs 단일 평가**: 카운슬은 4배 토큰·시간. 일반 개선은 `/evaluate` 유지. 카운슬은 (a) 뷰 전체 점검 (b) "전체적으로 별로" 판정 시 어느 축이 문제인지 진단 (c) 주린이/전문가 충돌 해결이 필요할 때.
+
+### 평가자 편향 회피 — 감점 기반 vs 가점 기반
+- 4축 점수(감점 기반): 블랙리스트 위반·다크 페어 누락·터치 타겟 등 **기계적 체크** — 안전한 평균에 수렴
+- 레퍼런스 대비 서술(가점 기반): "토스/로빈후드/블룸버그 대비 어디가 나은가·밀리는가" — 고수준 매력 체크
+- 감점만 피해서 PASS 받아도 "전체적으로 별로"면 재설계 루프로 전환하는 신호
+
+### 빌드 확인
+- `cd dashboard && npm run build` — 타입/번들 에러 검출. UI 검증은 빌드 성공 후 evaluator로.
+
+## AI 요약 루틴 (Claude Code가 직접 수행)
+
+Gemini/외부 AI API를 호출하지 않는다. **Claude Code 에이전트 자체가** 주기적으로 깨어나 데이터를 읽고, 스스로 요약을 만들어 DB에 쓴다. 시황 브리핑(`market_briefings`)과 동일 패턴.
+
+### 대상 루틴 2종
+
+| 루틴 | 저장 테이블 | 프론트 노출 |
+|---|---|---|
+| 종목 일일 한 줄 요약 | `stock_daily_summary` | StockSummaryHero Hero 서브 카드 |
+| 테마 맥락 해설 | `theme_daily_context` | HotThemeRaceWidget 카드 확장 |
+
+### 루틴 실행 흐름 (Claude Code가 따를 스텝)
+
+1. **타겟 확정**
+   - `python scripts/ai_summary_targets.py --kind stock --limit 50 --skip-done` → JSON 배열 (아직 오늘 요약이 없는 종목)
+   - `python scripts/ai_summary_targets.py --kind theme --limit 20 --skip-done`
+
+2. **컨텍스트 읽기** (타겟 하나마다)
+   - `python scripts/ai_summary_context.py --kind stock --code 000660` → 가격/수급 5일/기술지표/DART/뉴스 JSON
+   - `python scripts/ai_summary_context.py --kind theme --theme "2차전지"` → 평균 등락률/종목 Top3/관련 뉴스 JSON
+
+3. **스스로 요약 생성** (Claude Code의 thinking)
+
+4. **DB 기록**
+   - 종목: `python scripts/ai_summary_upsert.py --kind stock --code ... --one-liner "..." --drivers "..." --tone up --used-signals "price,flow,tech,news"`
+   - 테마: `python scripts/ai_summary_upsert.py --kind theme --theme "..." --context "..." --drivers "..." --tone up`
+   - 실패: `--status error --error "no_data"` (재시도 대상으로 남음)
+   - `updated_at`은 upsert 스크립트가 실행 시각으로 자동 기록 → 프론트에서 "발행 시각"으로 노출
+
+### 카피 규약 (주린이 타겟)
+
+**공통**
+- 말 끝 `-요/-에요` 자연스럽게. 명령·단정 금지.
+- 감정 부사 금지: `살짝`, `벌써`, `아직`, `무려`, `엄청`
+- 투자 권유·추천 단어 금지: `매수`, `매도`, `사세요`, `팔아야`. 허용: `관찰`, `주의`, `참고`.
+- 숫자는 컨텍스트에 있는 값만 사용. 근거 없으면 적지 말 것.
+- 전문 용어(이평선·이격도·신고가·공매도 등)는 써도 OK — 프론트의 `TermTooltip`이 풀이 제공.
+
+**종목 `one_liner` (25-60자)**
+- 형식: `<동력 1개> + <동력 2개> → <움직임>`
+- 예시
+  - `외국인 3일 연속 매수에 +3.2% 올라 60일 신고가를 찍었어요.`
+  - `MA5 이격도 -8% 진입 + 개인 반발 매수로 보합권 회복 중이에요.`
+  - `유상증자 공시 후 -7% 급락했어요. 기존 주주 지분 희석이 반영되고 있어요.`
+
+**종목 `drivers` (1-3개 키워드 배열)**
+- 명사구 중심. `외국인 매집`, `60일 신고가`, `유상증자 공시`, `HBM 호재`
+- 형용사·수식어 최소. `조금 강한 매수세` ❌ → `외국인 매집` ✅
+
+**종목 `tone` (enum)**
+- `up`: 상승 동력 우세
+- `down`: 하락 동력 우세
+- `neutral`: 방향성 불명 / 보합권
+- `risk`: 공시·공매도 급증 등 주의 플래그
+
+**종목 `used_signals` (enum 배열)**
+- `price`, `flow`, `tech`, `dart`, `news`, `short` 중 **실제 근거로 쓴 것만**. 팩트에 있어도 쓰지 않았으면 제외.
+
+**테마 `context` (40-90자, 1-2문장)**
+- 형식: `<외부 뉴스 동력> + <내부 종목 주도> → <평균 등락률>`
+- 예시
+  - `해외 배터리 CAPEX 발표와 LFP 전환 뉴스가 겹치며 +4.2% 상승. 엘앤에프가 +8%로 앞장섰어요.`
+  - `뚜렷한 뉴스 동력 없이 단독 수급 유입으로 +2%. 특정 재료 확인은 어렵습니다.`
+  - `미국 상호관세 발표 우려로 -3.1% 하락. 삼성SDI·LG에너지솔루션이 낙폭 주도.`
+
+**테마 `drivers` (1-3개)**
+- `해외 CAPEX`, `LFP 전환`, `실적 가이던스 상향`, `규제 이슈`
+
+**테마 `tone`**: `up` / `down` / `neutral`
+
+### 금지
+
+- **AI API 호출 금지** — Gemini·OpenAI·기타 외부 추론 API 사용 안 함. Claude Code가 직접 생성.
+- 실패 시 데이터를 지어내지 말고 `--status error --error "..."`로 기록. 나중 재시도 대상.
+- 작성 시 원본 뉴스 헤드라인·공시 제목을 **그대로 인용하지 말고** 주린이 말로 재기술.
+
+### 스케줄 권장
+
+| 시각 | 종목 | 테마 |
+|---|---|---|
+| 08:30 (장 시작 전) | 거래대금 상위 30 | - |
+| 12:00 (장중) | Top 20 중간 갱신 | - |
+| 16:00 (장 마감 후) | Top 50 전수 | Top 20 |
+
+### 미국 공매도 sync 권장 (2026-05-14 추가)
+
+| 시각 (KST) | 작업 | 스크립트 |
+|---|---|---|
+| **08:00** | 미국 공매도 종합 sync — 4 소스 순차 (FINRA daily + Finviz SI + iBorrowDesk + Ownership) | `scripts/run_us_short_sync.sh` |
+
+cron 예시: `0 8 * * * cd /path/to/투자정보 && ./scripts/run_us_short_sync.sh >> logs/us_short_sync.log 2>&1`
+
+각 sync 의 독립 실행도 가능:
+- FINRA Reg SHO Daily Short Volume: `python scripts/sync_us_short_volume.py --days 1`
+- Finviz SI%·DTC·ownership: `python scripts/sync_us_short_noapi.py --max-universe 1500`
+- iBorrowDesk borrow: `python scripts/sync_us_borrow_history.py --max-universe 300 --days 14`
+- Squeeze Score 산출 (랭킹 즉시): `python scripts/compute_us_squeeze_score.py --top 20 --require-si`
+
+DB 테이블 4종 (`us_short_volume_daily`, `us_short_interest_daily`, `us_short_borrow_daily`, `us_ownership_daily`)이 매일 갱신되면 `/api/overseas/squeeze/top` 과 `/api/overseas/squeeze/{symbol}` 가 최신 데이터로 응답.
+
+MCP `scheduled-tasks__create_scheduled_task` 또는 외부 cron에서 Claude Code를 invoke. 루틴 진입 프롬프트 템플릿은 `scratch/ai_routine_prompts.md`에 보관 (추후 작성).
+
+## 시황 브리핑 — "체크 포인트" bullet 카피 규약 (2026-05-11 강화)
+
+5개 brief SKILL (pre/morning/afternoon/post/evening) 모두 적용. `summary_structured.bullets` 의 **4번째 "체크 포인트"** 본문에 우선 적용. 다른 bullet 도 가능한 한 같은 톤.
+
+### 금지 단어 (즉시 감점)
+- `관전 포인트`, `포인트에요`, `포인트입니다`
+- `모멘텀`, `지속 여부`, `~할지 주목`
+- `방향성`, `흐름이에요`, `강도`
+- 기존 금지(이모지·감정부사·매수매도) 그대로
+
+### 괄호 설명 금지 (2026-05-11 추가)
+용어 옆에 괄호로 풀이 추가 금지. 프론트의 `TermTooltip` 이 이미 자동 풀이 제공.
+
+- ❌ "S&P 500 (미국 대표 500개 회사 평균) 이 +0.8% 올라"
+- ❌ "VIX (시장 공포 지수) 14.2 로 안정적"
+- ❌ "코스피 (한국 대표 종목 200개 평균) 는 6,219.45"
+- ❌ "프리마켓 (미국 정규장 시작 전 거래 시간) 은 +0.3%"
+- ✅ "S&P 500 이 +0.8% 올라" / "VIX 14.2 로 안정적" / "코스피 6,219.45" / "프리마켓 +0.3%"
+
+예외: 숫자 단위 명시 (예: "(억원)", "(백만주)") 또는 시점 명시 (예: "(11:30 기준)") 는 허용.
+
+### 필수 2문장 구조
+
+**문장 1 — 오늘 시장의 '한마디 진단' + 비교 베이스라인 또는 사건**
+- 일반 통계 나열 금지 (예: "상한가 N종목 + 급등 N종목" 만 ❌)
+- 강한 신호(사이드카 · 서킷 · 신고가 · 신저가 · 디커플링 · 외인 폭매도/매수)는 **반드시 첫 문장**
+- 숫자는 비교 베이스 또는 임팩트 풀이 동반 (예: "급등 18종목 — 평소 4종목 약 4배")
+
+**문장 2 — 다음 1-3시간 사용자 행동 단서**
+- 추상 "지속 여부" 금지 → 구체 관찰 대상 (예: "외인 누적이 +로 바뀌는지", "거래량이 줄어드는지")
+- 허용 동사: `확인해 주세요`, `같이 봐 주세요`, `한 번 체크`, `눈 떼지 마세요`, `침착하세요`
+
+### 좋은 예
+- "9시 30분 사이드카가 켜질 정도로 매수가 한꺼번에 몰린 날이에요 (분기에 한 번 정도). 오후 1시쯤 외국인 누적 매수가 더 늘어나는지 한 번만 확인해 주세요."
+- "코스피가 7,808 신기록을 다시 썼어요. 미국이 약세였는데 우리만 +4% — 흔치 않은 디커플링이에요. 광통신 1·2위 종목 거래량이 줄지 않으면 분위기 유지 신호로 봐 주세요."
+- "외국인이 4조 던졌어요. 어제 -7조에 이어 이틀째 차익 실현 흐름. 점심 후 외인 누적이 -4조 안쪽으로 줄어들면 매도 진정 신호예요."
+
+### 나쁜 예 (현재 패턴 — 고침 대상)
+- ❌ "오전 중 상한가 6종목과 20% 이상 급등 18종목이 포착됐어요. 점심 이후 외국인 추가 매수 강도와 광통신·반도체 모멘텀 지속 여부가 오후 관전 포인트에요."
+   → 추상 단어·비교 베이스 없음·행동 모호
+
+### 시장 상황별 권장 패턴 (8종)
+
+각 brief SKILL 가 자동 감지 결과(`scripts/detect_market_signals.py`) 받으면 해당 상황에 맞는 패턴 우선 적용.
+
+```
+[사이드카 발동]
+"9:30 사이드카가 켜졌어요 — 강한 매수가 한꺼번에 몰린 신호예요 (분기에 한 번 수준).
+ 오후 1시 즈음 사이드카가 재발동되지 않는지 봐 주세요."
+
+[서킷 브레이커]
+"장이 잠시 멈췄어요 — N분 후 재개돼요. 패닉 매도/매수의 신호일 가능성.
+ 재개 후 첫 분 가격이 어디서 잡히는지 보면 분위기 짐작돼요."
+
+[신고가 갱신]
+"코스피가 X 신기록을 다시 썼어요. 다음 마디는 Y 근처.
+ 종목별 거래량이 줄어들지 않으면 추세 유지 신호로 봐 주세요."
+
+[신저가 위험]
+"코스피가 N개월 만에 신저가 권으로 내려왔어요. 외인 매도 N일 누적 -N조.
+ 거래량이 늘면서 반등하는 종목이 나오는지 한 번 보세요."
+
+[디커플링 (미국 vs 한국)]
+"미국은 어젯밤 N% 약세였는데 한국만 N% 강세 — 흔치 않은 디커플링이에요.
+ 자체 동력이 어느 테마(예: 광통신)에서 나오는지 한 번 보세요."
+
+[외인 폭매도]
+"외국인이 N조 던졌어요 (5일 평균 N조 → 약 N배). 개인이 받아내는 중.
+ 점심 후 외인 누적이 -N조 안쪽으로 줄면 매도 진정 신호예요."
+
+[변동성 큰 날 (whipsaw)]
+"한 시간 만에 +N% → +N% 로 후진. 손이 빠른 날이에요.
+ 단기 진입은 침착하게, 한 박자 늦게 들어가세요."
+
+[횡보·평온]
+"오늘은 큰 사건 없이 잠잠한 날이에요. 평소 거래대금의 약 N% 수준.
+ 종목 공부하기 좋은 날 — 관심종목 펀더 한 번 정리해 보세요."
+```
+
+### 비교 베이스라인 의무화
+
+체크 포인트 bullet 의 **모든 숫자**는 다음 중 하나가 동반되어야 함:
+- 평소(5/20/60일) 대비 비율 ("평소 N건 → 오늘 M건, 약 X배")
+- 시계열 변화 ("어제 -1% / 오늘 +4% — 3일만에 정반대")
+- 임팩트 풀이 ("분기에 한 번 수준", "올해 두 번째")
+
+단순 절대값만 쓰면 안 됨 (예: "급등 20종목" ❌ → "급등 20종목 (평소 5종목 약 4배)" ✅)
+
+## brief 연속성 — "약속한 이벤트는 다음 brief에서 반드시 이행" (2026-05-15 강화)
+
+evening/post brief 가 다음 brief 시점에 발표될 이벤트를 명시적으로 예고했다면(예: "오늘 밤 21:30 미국 소매판매 발표", "새벽 5:30 어플라이드 머티리얼즈 실적", "내일 06:30 정리해 드릴게요"), 다음 pre/morning brief 는 그 이벤트들의 결과를 **반드시 본문 첫 문장 또는 두 번째 문장에 cover** 해야 한다.
+
+### 절차
+
+1. **brief 작성 시작 전** — 직전 evening/post brief 본문을 DB에서 읽어 "예고된 이벤트" 추출
+   ```sql
+   SELECT summary FROM market_briefings
+   WHERE briefing_date = '<어제>' AND slot IN ('evening', 'post')
+   ORDER BY slot_time DESC LIMIT 1
+   ```
+2. 예고 이벤트 추출 키워드: `발표`, `실적`, `정리해 드릴게요`, `좌우할 수 있어요`, `결과는`, `내일 06:30/장전 브리핑에서`
+3. 매크로 이벤트는 `collectors/macro_collector.py::MacroCollector.get_us_overnight_events()` 로 결과 확보
+4. 미국 빅테크 실적(AMAT·NVDA·TSMC·MU·AVGO 등)은 매크로 캘린더에 안 들어옴 — `WebSearch` 또는 `news_events` 테이블 검색으로 결과 확보
+5. **결과를 못 가져온 경우 절대 침묵 금지** — "AMAT 결과는 아직 확인되지 않았어요, morning brief 에서 다시 짚어 드릴게요" 같이 솔직히 짚되 반드시 언급
+
+### 금지
+
+- 예고한 이벤트의 결과를 cover 안 하고 다른 주제로 brief 전체 채우기 (사용자 신뢰 깨짐)
+- "어젯밤 미국은 사상 최고치" 같은 일반 시장 요약으로 약속한 구체 이벤트 대체
+- 예고된 종목(SK하이닉스·삼성전자) 관찰점을 누락한 채 "외인 선물 흐름" 같은 일반 단서로 대체
+
+### 좋은 예 (2026-05-15 핫픽스 적용 본문)
+
+"어제 약속드린 두 이벤트 정리해 드릴게요. 미국 4월 소매판매는 헤드라인 +0.5%로 예상 부합이었지만 자동차 제외 +0.7%·컨트롤 그룹 +0.5%는 예상 상회로 소비 견조 확인이에요. (...) 어플라이드 머티리얼즈는 매출 79억 달러 사상 최고치, EPS 3.51달러로 컨센서스 2.71달러 크게 상회, 2026 장비 매출 가이던스 +30% 이상에 HBM·DRAM·첨단패키징 강세를 분명히 했어요 — SK하이닉스·삼성전자 출발에 우호적 환경이에요."
+
+→ evening 에서 약속한 (a) 소매판매, (b) AMAT 실적, (c) SK하이닉스·삼성전자 관찰점 3가지 모두 첫 단락에 cover.
+
+### 나쁜 예 (2026-05-15 06:48 원본 — 핫픽스 전)
+
+"어젯밤 미국이 사상 최고치를 다시 썼어요. (...) 미국 4월 소매판매는 예상 부합(+0.5%)이었지만 (...) 9시 첫 30분 외국인 선물 흐름이 +로 돌아오는지 한 번만 확인해 주세요."
+
+→ 소매판매는 cover 했지만 AMAT 실적은 0언급, SK하이닉스·삼성전자 관찰점도 누락. 약속의 절반만 이행 → 사용자 신뢰 깨짐.
+
+## 전날 미국 매크로 이벤트 — morning/pre brief 의무 (2026-05-14)
+
+morning(장 시작 전) / pre(장 시작 직전) brief 작성 시 **전날 KST 밤~오늘 새벽 미국에서 발표된 매크로 이벤트**를 빠짐없이 다뤄야 한다. 사용자 피드백 인용: "아침 브리핑에서 전날 미국에서 PPI 있었을 수도 있고 뭔가 특별한 이벤트들이 있었을 수도 있는데 그거에 대해서 안 다루네."
+
+### 데이터 소스
+`collectors/macro_collector.py::get_all_macros()` 의 `us_overnight_events` 필드 (Trading Economics 캘린더 파싱). 각 이벤트 dict 구조:
+```
+{
+  "title": "PPI MoM",
+  "reference": "APR",          # 참조 기간 (4월 발표분)
+  "kst": "2026-05-14 01:30",   # 한국 시간
+  "actual": "1.4%",            # 실제 발표치
+  "forecast": "0.4%",          # 컨센서스
+  "previous": "0.7%",          # 직전치
+  "previous_revised_from": null,
+  "importance": "high",        # high / medium / low
+  "surprise": "above"          # above / in_line / below (실제 vs 예상)
+}
+```
+
+기본은 `min_importance="medium"` 이상만 + 직전 30시간. high 이벤트는 무조건 brief 에 언급.
+
+### 카피 패턴
+
+**문장 1 — 가장 큰 surprise 이벤트 강조 (있을 때만)**
+- 형식: `<지표명> <실제>로 발표 — 예상 <예상> 대비 크게 <상회/하회>. <한국 시장 함의 1줄>.`
+- 예시
+  - "미국 PPI(4월) 1.4%로 발표 — 예상 0.4% 대비 크게 상회. 인플레 우려로 코스피 외인 매도 주의."
+  - "CPI(3월) 2.8%로 예상 부합. Fed 6월 인하 기대 유지."
+  - "Fed 의장 발언 — 추가 인하 신중. 원달러 환율 1,365원으로 상승."
+
+**문장 2 — 오늘 한국 장에서 볼 관찰점**
+- 추상 "주목" 금지 → 구체 관찰 대상
+- 예시
+  - "9시 30분 외국인 누적 매수가 -1000억 안쪽으로 멈추는지 확인해 주세요."
+  - "반도체·금융주가 미국 동일 섹터(-2% / +1%) 와 같은 방향으로 흐르는지 봐 주세요."
+
+### 시장 상황별 보강 패턴 (기존 8종에 추가)
+
+```
+[전날 미국 매크로 surprise]
+"미국 PPI 1.4%로 예상 0.4% 대비 크게 상회 — 인플레 재점화 우려.
+ 9시 30분 외국인 매도 시작이 -2000억을 넘기는지 한 번 봐 주세요."
+
+[Fed 인사 발언]
+"어젯밤 Fed 의장이 N월 인하 신중 발언 — 시장 반응은 S&P -0.5% 약세.
+ 코스피 금융주가 미국 은행주(-1.2%) 와 같이 약세로 출발하는지 확인해 주세요."
+
+[빅 이벤트 부재]
+"간밤 미국에서 주목할 발표는 없었어요. 평이한 아침이에요.
+ 거래대금 상위가 어제와 비슷한 종목 위주인지 한 번만 체크해 주세요."
+```
+
+### 출력 규칙
+
+- **반드시 다뤄야**: `importance == "high"` 이벤트가 1개 이상이면 brief 첫 bullet 에 진입.
+- **선택**: `importance == "medium"` 만 있으면 "체크 포인트" bullet 안 짧게 한 줄.
+- **인용 금지**: 영문 원문 그대로 인용 X. 한국어 지표명(예: "생산자물가지수 PPI")으로.
+- **이모지·괄호 부가설명 금지** (기존 규칙 연장).
+- **숫자 단위 명시**: "PPI 1.4%" / "비농업고용 +25만" / "원유 재고 -430만 배럴"
+
+## 참고
+- 영상 기반 하네스 설계: "Anthropic 멀티 에이전트 전략 / 3단계 하네스 설계법"
+- Evaluator 분리 이유: 자가 평가 편향(자화자찬) 회피. Generator는 스스로의 작업을 "완성됐다"고 말하면 안 되고, 오직 Evaluator의 통과만 완료 신호.

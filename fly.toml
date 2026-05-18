@@ -1,0 +1,83 @@
+# JURINMAP Backend — Fly.io 배포 설정
+#
+# 첫 배포:
+#   1. fly auth login
+#   2. fly apps create jurinmap-backend       (또는 fly launch — 이 파일 인식해서 가이드)
+#   3. fly secrets set KIS_APP_KEY=... KIS_APP_SECRET=... DART_API_KEY=... \
+#                       FIREBASE_SERVICE_ACCOUNT_JSON="$(cat secrets/firebase-service-account.json)"
+#   4. Postgres: fly mpg create  (Managed Postgres) 또는 외부 RDS/Supabase
+#   5. fly deploy
+#
+# 한국 latency 최적: primary_region = 'nrt' (도쿄). 'icn' (서울) 은 베타.
+#
+# 재배포: fly deploy
+# 로그:   fly logs
+# SSH:    fly ssh console
+
+app = "jurinmap-backend"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# ─── 환경 변수 (시크릿 아닌 것만. 시크릿은 `fly secrets set`) ──
+[env]
+  TZ = "Asia/Seoul"
+  CORS_OPEN = "false"
+  DATA_PIPELINE_ENABLED = "1"
+  DATA_PIPELINE_TIMEZONE = "Asia/Seoul"
+  BRIEF_PUSH_ENABLED = "1"
+  # PGHOST/REDIS_HOST 는 fly.io 의 Managed Postgres / Upstash Redis 연결 시
+  # `fly secrets set` 또는 DATABASE_URL 형식으로 따로 주입.
+
+# ─── HTTP 서비스 ──────────────────────────────────────────────
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false       # KIS WS 가 always-on 이라 stop 금지
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+# ─── Healthcheck ──────────────────────────────────────────────
+[[http_service.checks]]
+  grace_period = "60s"
+  interval = "30s"
+  method = "GET"
+  timeout = "10s"
+  path = "/api/ops/metrics"
+
+# ─── 머신 사이즈 ──────────────────────────────────────────────
+# shared-cpu-1x / 1GB 메모리 시작. KIS WS + APScheduler 충분.
+# 트래픽 증가 시 shared-cpu-2x 또는 dedicated 로 스케일업.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  cpus = 1
+
+# ─── 마운트된 볼륨 (로그·데이터 영구) ─────────────────────────
+# fly volumes create jurin_data --size 3 --region nrt
+[[mounts]]
+  source = "jurin_data"
+  destination = "/app/data"
+  initial_size = "3gb"
+
+# ─── deploy 전략 ──────────────────────────────────────────────
+[deploy]
+  strategy = "immediate"           # KIS WS 끊김 최소화. 무중단 원하면 rolling.
+  release_command = ""             # 마이그레이션 필요 시 여기에 (예: "python scripts/migrate.py")
+
+# ─── 프로세스 ─────────────────────────────────────────────────
+[processes]
+  app = "uvicorn server.app_server:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips *"
+
+# ─── 메트릭 (선택) ───────────────────────────────────────────
+# Fly 의 grafana 통합. /api/ops/metrics 가 JSON 이라 prometheus 변환 필요.
+# [metrics]
+#   port = 8000
+#   path = "/metrics"
