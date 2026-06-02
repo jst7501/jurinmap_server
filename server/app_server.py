@@ -31,10 +31,8 @@ from server.routes.stocks import (
 )
 from server.routes.push import router as push_router
 from server.routes.watchlist import router as watchlist_router
-from server.routes.us_chat import router as us_chat_router
 from server.routes.feedback import router as feedback_router
 from server.routes.disclosures import router as disclosures_router
-from server.routes.overseas_stocks import router as overseas_router
 from server.routes.community import router as community_router
 from server.routes.trades import router as trades_router
 from server.routes.ipo import router as ipo_router
@@ -45,6 +43,10 @@ from server.routes.market_brief import router as market_brief_router
 from server.routes.nxt import router as nxt_router
 from server.routes.screener import router as screener_router
 from server.routes.ai_trader import router as ai_trader_router
+from server.routes.credit_short import router as credit_short_router
+from server.routes.data_health import router as data_health_router
+from server.routes.events import router as events_router
+from server.routes.big_news import router as big_news_router
 # from server.routes.briefing import router as briefing_router  # 중단
 from server.monitoring import snapshot as monitoring_snapshot, observe_http_request, is_kis_degraded
 
@@ -552,7 +554,8 @@ _CACHE_TTL: list[tuple[str, int]] = [
     ("/api/market-brief",     60),
     ("/api/themes",          120),
     ("/api/macro",           120),
-    ("/api/news",            120),
+    # /api/news 캐시 제거 (2026-05-19) — startswith 매치라 /api/news/{id} 상세도 같이 잡혀서
+    # 푸시 클릭 시 새 뉴스가 stale 응답을 받는 문제 발생. 뉴스는 신선도 우선.
     ("/api/vi-status",        30),
 ]
 
@@ -668,6 +671,12 @@ async def log_requests(request: Request, call_next):
         ttl = _get_cache_ttl(request.url.path)
         if ttl:
             response.headers["Cache-Control"] = f"public, max-age={ttl}, stale-while-revalidate={ttl * 2}"
+        elif request.url.path.startswith("/api/"):
+            # 2026-06-02 — ttl 없는 /api/* 는 명시 no-store.
+            # 5/29 사고: Nginx fallback (백엔드 502→index.html) 200 응답을 CDN 이 4일째 캐시.
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["CDN-Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
 
     response = _attach_degraded_meta_to_response(request, response, kis_degraded)
 
@@ -677,10 +686,8 @@ async def log_requests(request: Request, call_next):
 app.include_router(stocks_router)
 app.include_router(push_router)
 app.include_router(watchlist_router)
-app.include_router(us_chat_router)
 app.include_router(feedback_router)
 app.include_router(disclosures_router)
-app.include_router(overseas_router)
 app.include_router(community_router)
 app.include_router(trades_router)
 app.include_router(ipo_router)  # routers registered
@@ -691,6 +698,10 @@ app.include_router(market_brief_router)
 app.include_router(nxt_router)
 app.include_router(screener_router)
 app.include_router(ai_trader_router)
+app.include_router(credit_short_router)
+app.include_router(data_health_router)
+app.include_router(events_router)
+app.include_router(big_news_router)
 
 
 @app.get("/api/ops/metrics")
