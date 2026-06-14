@@ -77,6 +77,25 @@ def _save_ohlcv_to_db(code: str, candles: list):
         logger.exception("failed to persist ohlcv into price_daily (code=%s, candles=%d): %s", code, len(candles), e)
 
 
+def _last_date(candles: list) -> str:
+    """candle 리스트의 마지막(최신) 날짜 'YYYYMMDD' 또는 ''."""
+    return str(candles[-1].get("date") or "") if candles else ""
+
+
+def _candles_stale(candles: list, max_age_days: int = 4) -> bool:
+    """마지막 봉이 max_age_days(달력일)보다 오래되면 stale → 라이브 재조회 트리거.
+    일봉은 보통 직전 거래일까지가 정상이라 1~2일 차이는 정상. 주말+공휴일 여유로 4일.
+    비어있으면 stale. (2026-06-12: price_daily sync 중단으로 4월 데이터 박제 → 요청 시 자가치유)"""
+    last = _last_date(candles)
+    if not last or len(last) != 8:
+        return not candles
+    try:
+        from datetime import datetime as _dt
+        return (datetime.now() - _dt.strptime(last, "%Y%m%d")).days > max_age_days
+    except Exception:
+        return False
+
+
 @router.get("/api/stocks/{code}/ohlcv")
 def get_stock_ohlcv(code: str, period: str = "1M"):
     import time
@@ -108,26 +127,28 @@ def get_stock_ohlcv(code: str, period: str = "1M"):
     except Exception:
         pass
 
-    # ── 2단계: 1M/3M은 KIS API (빠름) ──────────────────────────
-    if len(candles) < n and period in ("1M", "3M"):
+    # ── 2단계: 1M/3M은 KIS API (빠름). DB가 부족하거나 stale(날짜 오래됨)이면 재조회 ──
+    if (len(candles) < n or _candles_stale(candles)) and period in ("1M", "3M"):
         try:
             sys.path.insert(0, ROOT_DIR)
             from collectors.kis_api import KISCollector
             raw = KISCollector().get_daily_price(code, "D")
             raw = raw[:n]
             candles_kis = list(reversed(raw))
-            if len(candles_kis) > len(candles):
+            # 행이 더 많거나(부족분 보충), DB가 stale 인데 KIS 가 더 최신이면 교체
+            if candles_kis and (len(candles_kis) > len(candles) or _last_date(candles_kis) > _last_date(candles)):
                 candles = candles_kis
                 threading.Thread(target=_save_ohlcv_to_db, args=(code, candles), daemon=True).start()
         except Exception:
             pass
 
-    # ── 3단계: 3M/6M/1Y는 pykrx (장기 데이터) ─────────────────────
-    if len(candles) < n and period in ("3M", "6M", "1Y"):
+    # ── 3단계: 3M/6M/1Y는 pykrx (장기 데이터). DB 부족·stale 시 재조회 ─────────────
+    if (len(candles) < n or _candles_stale(candles)) and period in ("3M", "6M", "1Y"):
         try:
             pykrx_days = {"3M": 100, "6M": 200, "1Y": 400}[period]
             candles_pyk = _fetch_ohlcv_pykrx(code, pykrx_days)
-            if candles_pyk:
+            # pykrx 는 오늘까지 조회 → 비어있지 않으면 최신. 더 최신이거나 더 많으면 교체.
+            if candles_pyk and (_last_date(candles_pyk) > _last_date(candles) or len(candles_pyk[-n:]) > len(candles)):
                 candles = candles_pyk[-n:]
                 threading.Thread(target=_save_ohlcv_to_db, args=(code, candles_pyk), daemon=True).start()
         except Exception:
@@ -405,17 +426,41 @@ def _upsert_ranking_to_db(items: list) -> None:
             code = item.get("code")
             if not code:
                 continue
+            # KIS 가 한 tick 에 trading_value=0/null 같은 글리치 응답을 줄 때
+            # 삼성·하이닉스 같은 대형주가 잠시 정렬 뒤로 밀려 깜빡이는 문제 방지:
+            # trading_value/volume 은 0/null 일 때 옛 값 유지, 양수일 때만 갱신.
+            # current_price·change_pct 도 0/null 글리치 가드 (현재가가 0 인 종목은 없음).
             conn.execute(
                 """
                 INSERT INTO price_today (code, current_price, change_pct, change_amt,
                                         trading_value, trading_volume, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (code) DO UPDATE SET
-                  current_price  = EXCLUDED.current_price,
-                  change_pct     = EXCLUDED.change_pct,
-                  change_amt     = EXCLUDED.change_amt,
-                  trading_value  = EXCLUDED.trading_value,
-                  trading_volume = EXCLUDED.trading_volume,
+                  current_price  = CASE
+                    WHEN COALESCE(EXCLUDED.current_price, 0) > 0
+                    THEN EXCLUDED.current_price
+                    ELSE price_today.current_price
+                  END,
+                  change_pct     = CASE
+                    WHEN EXCLUDED.current_price IS NOT NULL AND EXCLUDED.current_price > 0
+                    THEN EXCLUDED.change_pct
+                    ELSE price_today.change_pct
+                  END,
+                  change_amt     = CASE
+                    WHEN EXCLUDED.current_price IS NOT NULL AND EXCLUDED.current_price > 0
+                    THEN EXCLUDED.change_amt
+                    ELSE price_today.change_amt
+                  END,
+                  trading_value  = CASE
+                    WHEN COALESCE(EXCLUDED.trading_value, 0) > 0
+                    THEN EXCLUDED.trading_value
+                    ELSE price_today.trading_value
+                  END,
+                  trading_volume = CASE
+                    WHEN COALESCE(EXCLUDED.trading_volume, 0) > 0
+                    THEN EXCLUDED.trading_volume
+                    ELSE price_today.trading_volume
+                  END,
                   updated_at     = EXCLUDED.updated_at
                 """,
                 (code, item.get("close"), item.get("change_pct"), item.get("change_amt"),
@@ -469,6 +514,52 @@ _RANK_VOLUME_WAIT_ON_MISS_OPEN_SEC = max(0.0, float(os.getenv("RANK_VOLUME_WAIT_
 _RANK_VOLUME_WAIT_ON_MISS_CLOSED_SEC = max(0.0, float(os.getenv("RANK_VOLUME_WAIT_ON_MISS_CLOSED_SEC", "0.5")))
 
 
+def _ranking_sanity_check(items: list, market_name: str) -> bool:
+    """KIS 글리치 응답 검출. trading_value=0/누락된 항목이 top10에 3개 이상이면 글리치.
+
+    2026-05-26 강화: DB UPSERT 가드만으로는 메모리/Redis 캐시 깜빡임을 못 막아서
+    응답 자체를 거부하는 가드 추가. 글리치 응답이 캐시에 들어가면 그대로 사용자 노출.
+    """
+    if not items or len(items) < 10:
+        logger.warning("[ranking sanity] %s len=%d 비정상", market_name, len(items) if items else 0)
+        return False
+    top10 = items[:10]
+    bad = sum(1 for it in top10 if not it.get("trading_value") or int(it.get("trading_value") or 0) <= 0)
+    if bad >= 3:
+        logger.warning("[ranking sanity] %s top10 trading_value=0 비율 %d/10 — 글리치 감지", market_name, bad)
+        return False
+    return True
+
+
+def _carry_forward_rows(new_list: list, stale_list: list) -> list:
+    """KIS 글리치로 **일부 종목만**(예: 삼성전자·SK하이닉스) trading_value=0/누락돼도
+    직전 정상값을 유지한다. sanity check(top10 중 3개+)는 1~2개 글리치를 못 잡아서,
+    그 0값 행이 거래대금 내림차순 정렬에서 바닥으로 밀려 top100 에서 빠졌다 들어왔다
+    하는 '생겼다 사라졌다' 깜빡임의 직접 원인. present-but-zero 행만 직전 정상행으로 대체.
+    """
+    if not stale_list:
+        return new_list
+    stale_ok = {}
+    for it in stale_list:
+        c = it.get("code")
+        if c and int(it.get("trading_value") or 0) > 0:
+            stale_ok[c] = it
+    if not stale_ok:
+        return new_list
+    out = []
+    fixed = 0
+    for it in new_list:
+        c = it.get("code")
+        if c in stale_ok and int(it.get("trading_value") or 0) <= 0:
+            out.append(stale_ok[c])  # 글리치 행 → 직전 정상행 유지
+            fixed += 1
+        else:
+            out.append(it)
+    if fixed:
+        logger.info("[ranking] carry-forward: trading_value=0 글리치 %d개 직전값 유지", fixed)
+    return out
+
+
 def _refresh_ranking_volume_sync(redis_ttl: int) -> dict | None:
     now = time.time()
     try:
@@ -476,11 +567,41 @@ def _refresh_ranking_volume_sync(redis_ttl: int) -> dict | None:
         collector = KISCollector()
         kospi = _pad_codes(collector.get_transaction_value_ranking("0001"))
         kosdaq = _pad_codes(collector.get_transaction_value_ranking("1001"))
+
+        # 글리치 응답이면 이전 cache 유지 (sanity check). 둘 중 하나라도 정상이면 진행.
+        kospi_ok = _ranking_sanity_check(kospi, "kospi")
+        kosdaq_ok = _ranking_sanity_check(kosdaq, "kosdaq")
+        if not kospi_ok and not kosdaq_ok:
+            stale = _RANK_VOLUME_CACHE.get("data")
+            if stale is not None:
+                logger.warning("[ranking] 양쪽 다 글리치 — 이전 cache 유지 (삼성/하이닉스 깜빡임 방지)")
+                return stale
+            # cache 도 없는 cold start 면 어쩔 수 없이 진행
+        # 부분 글리치: 글리치인 쪽만 이전 cache 의 동일 시장 데이터로 교체
+        if not kospi_ok:
+            stale = _RANK_VOLUME_CACHE.get("data") or {}
+            if stale.get("kospi"):
+                logger.info("[ranking] kospi 글리치 — 이전 kospi cache 유지, kosdaq 만 새로 갱신")
+                kospi = stale["kospi"]
+        if not kosdaq_ok:
+            stale = _RANK_VOLUME_CACHE.get("data") or {}
+            if stale.get("kosdaq"):
+                logger.info("[ranking] kosdaq 글리치 — 이전 kosdaq cache 유지, kospi 만 새로 갱신")
+                kosdaq = stale["kosdaq"]
+
+        # 종목 단위 carry-forward: sanity 통과한 리스트라도 1~2개(삼성전자·SK하이닉스 등)만
+        # trading_value=0 으로 오는 글리치를 직전 정상값으로 메워 top100 깜빡임 차단.
+        _stale_all = _RANK_VOLUME_CACHE.get("data") or {}
+        kospi = _carry_forward_rows(kospi, _stale_all.get("kospi") or [])
+        kosdaq = _carry_forward_rows(kosdaq, _stale_all.get("kosdaq") or [])
+
         result = {"kospi": kospi, "kosdaq": kosdaq, "updated_at": datetime.now().strftime("%H:%M:%S")}
         _RANK_VOLUME_CACHE["data"] = result
         _RANK_VOLUME_CACHE["ts"] = now
         redis_set_json(_REDIS_RANK_VOL_KEY, result, ttl_seconds=max(5, int(redis_ttl or 5)))
-        threading.Thread(target=_upsert_ranking_to_db, args=(kospi + kosdaq,), daemon=True).start()
+        # DB UPSERT 는 글리치 아닌 항목만 (가드는 이미 _upsert_ranking_to_db 안에 있지만 한 겹 더)
+        clean_items = [it for it in (kospi + kosdaq) if int(it.get("trading_value") or 0) > 0]
+        threading.Thread(target=_upsert_ranking_to_db, args=(clean_items,), daemon=True).start()
         return result
     except Exception as kis_err:
         logger.warning("KIS ranking/volume failed: %s ; falling back to DB", kis_err)
