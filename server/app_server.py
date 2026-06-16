@@ -2,7 +2,7 @@
 FastAPI 백엔드 서버 (thin entry point)
 Postgres 기반 API 서버
 """
-import sys, os, threading, time, logging, subprocess, json
+import sys, os, threading, time, logging, subprocess, json, hmac
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -16,7 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from server.core.settings import ROOT_DIR, DATA_DIR, JSON_LATEST
 from server.core.encoding import force_utf8_runtime
-from server.core.security import security_runtime_summary, verify_http_request
+from server.core.security import _env_bool, security_runtime_summary, verify_http_request
 from server.routes.stocks import (
     router as stocks_router,
     start_timeline_background_poller,
@@ -42,6 +42,7 @@ from server.routes.votes import router as votes_router
 from server.routes.market_brief import router as market_brief_router
 from server.routes.nxt import router as nxt_router
 from server.routes.screener import router as screener_router
+from server.routes.value_chain import router as value_chain_router
 from server.routes.ai_trader import router as ai_trader_router
 from server.routes.credit_short import router as credit_short_router
 from server.routes.data_health import router as data_health_router
@@ -282,8 +283,9 @@ def trigger_nightly_maintenance(reason: str = "manual") -> bool:
 
 
 def _run_morning_maintenance(reason: str):
-    """아침 루틴: 미국 지수 + 미국 테마 + (선택) 추가 데이터 수집.
-    KST 07:05에 발화. 미국장 마감 후 미장 데이터 갱신 목적.
+    """아침 루틴: macro 캐시 무효화. KST 07:05에 발화.
+    미국 지수·테마 수집 step (fetch_us_indices / refresh_us_themes) 은
+    pennymap-backend 이관 (2026-05-29).
     """
     if not _MORNING_LOCK.acquire(blocking=False):
         return
@@ -295,29 +297,7 @@ def _run_morning_maintenance(reason: str):
         _MORNING_STATUS["steps"] = []
         started = time.time()
 
-        # 1) 미국 3대 지수 (yfinance → macro.usa_indices_json)
-        _MORNING_STATUS["steps"].append(
-            _run_subprocess_step(
-                "fetch_us_indices",
-                [
-                    sys.executable,
-                    os.path.join(ROOT_DIR, "scripts", "fetch_us_indices.py"),
-                ],
-            )
-        )
-
-        # 2) 미국 테마 (parse_themes_us + us_theme_price_collector)
-        _MORNING_STATUS["steps"].append(
-            _run_subprocess_step(
-                "refresh_us_themes",
-                [
-                    sys.executable,
-                    os.path.join(ROOT_DIR, "scripts", "refresh_us_themes.py"),
-                ],
-            )
-        )
-
-        # 3) macro 캐시 무효화 (Redis)
+        # macro 캐시 무효화 (Redis)
         redis_t0 = time.time()
         try:
             from server.cache import _get_client, _prefixed
@@ -445,6 +425,35 @@ async def _lifespan(app: FastAPI):
     """
     logger.info("server start")
     _patch_kis_collector_metrics_once()
+
+    # ── Windows ProactorEventLoop 무해 노이즈 억제 ─────────────────────────
+    # 클라이언트(cloudflared 경유) 연결이 쓰기 도중 끊기면 소켓 transport 의
+    # _ProactorBaseWritePipeTransport._loop_writing 콜백에서
+    #   AssertionError: assert f is self._write_fut
+    # 가 터져 로그를 도배한다. CPython 의 알려진 Windows 버그로 데이터 손상은 없고
+    # 죽는 연결 1개에 국한된다. 그 케이스(=_loop_writing 의 AssertionError)만 조용히 무시.
+    try:
+        import sys as _sys
+        if _sys.platform == "win32":
+            import asyncio as _asyncio
+
+            _loop = _asyncio.get_running_loop()
+            _prev_handler = _loop.get_exception_handler()
+
+            def _proactor_noise_filter(loop, context):
+                msg = context.get("message", "") or ""
+                exc = context.get("exception")
+                if "_loop_writing" in msg and isinstance(exc, AssertionError):
+                    return  # 무해한 Proactor write-future race — 로그 생략
+                if _prev_handler:
+                    _prev_handler(loop, context)
+                else:
+                    loop.default_exception_handler(context)
+
+            _loop.set_exception_handler(_proactor_noise_filter)
+            logger.info("[startup] Proactor _loop_writing AssertionError 노이즈 필터 설치")
+    except Exception as _e:
+        logger.debug("proactor noise filter skip: %s", _e)
     try:
         from server.state import ensure_hot_query_indexes
         ensure_hot_query_indexes()
@@ -518,7 +527,12 @@ class SafeJSONResponse(_StdJSONResponse):
         ).encode("utf-8")
 
 
-app = FastAPI(title="二쇱떇 ??쒕낫??API", version="2.0", lifespan=_lifespan, default_response_class=SafeJSONResponse)
+_API_DOCS_ENABLED = _env_bool("ENABLE_API_DOCS", False)
+
+app = FastAPI(title="二쇱떇 ??쒕낫??API", version="2.0", lifespan=_lifespan, default_response_class=SafeJSONResponse,
+              docs_url="/docs" if _API_DOCS_ENABLED else None,
+              redoc_url=None,
+              openapi_url="/openapi.json" if _API_DOCS_ENABLED else None)
 os.makedirs(os.path.join(DATA_DIR, "company_logos"), exist_ok=True)
 app.mount("/assets", LogoFallbackStaticFiles(directory=DATA_DIR), name="assets")
 app.mount("/api/assets", LogoFallbackStaticFiles(directory=DATA_DIR), name="api-assets")
@@ -635,9 +649,43 @@ def _attach_degraded_meta_to_response(
     return response
 
 # ??? ?붿껌 濡쒓퉭 + Cache-Control 誘몃뱾?⑥뼱 ??????????????????????
+_ADMIN_PROXY_HEADERS = ("x-forwarded-for", "cf-connecting-ip")
+
+
+def _is_admin_request_allowed(request: Request) -> bool:
+    token = (os.getenv("ADMIN_API_TOKEN") or "").strip()
+    # compare_digest 는 비ASCII str 에 TypeError — 헤더는 latin-1 디코딩이라 bytes 로 비교
+    if token and hmac.compare_digest(
+        request.headers.get("x-admin-token", "").encode(), token.encode()
+    ):
+        return True
+    # 로컬 직접 호출 허용 — Cloudflare/nginx 경유 트래픽은 x-forwarded-for /
+    # cf-connecting-ip 를 항상 붙이므로, 해당 헤더가 있으면 외부로 간주.
+    client_host = request.client.host if request.client else None
+    if client_host in ("127.0.0.1", "::1") and not any(
+        request.headers.get(h) for h in _ADMIN_PROXY_HEADERS
+    ):
+        return True
+    return False
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.time()
+    path = request.url.path
+    if path.startswith("/api/admin") or path == "/api/ops/metrics":
+        if not _is_admin_request_allowed(request):
+            elapsed = time.time() - start
+            logger.warning(
+                "ADMIN BLOCK %s %s client=%s %.3fs",
+                request.method,
+                path,
+                request.client.host if request.client else None,
+                elapsed,
+            )
+            observe_http_request(403, elapsed)
+            return JSONResponse(status_code=403, content={"detail": "admin_forbidden"})
+
     allowed, reason = verify_http_request(request)
     if not allowed:
         elapsed = time.time() - start
@@ -697,6 +745,7 @@ app.include_router(votes_router)
 app.include_router(market_brief_router)
 app.include_router(nxt_router)
 app.include_router(screener_router)
+app.include_router(value_chain_router)
 app.include_router(ai_trader_router)
 app.include_router(credit_short_router)
 app.include_router(data_health_router)
