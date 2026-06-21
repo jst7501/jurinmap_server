@@ -1014,6 +1014,48 @@ def get_stock_daily_summary(code: str):
     }
 
 
+@app.get("/api/stocks/{code}/storyline")
+def get_stock_storyline(code: str):
+    """종목 연재 — stock_daily_summary 시계열에서 이어지는 스토리라인 감지.
+    별도 수집 없이 on-demand 로 최근 history 를 재조립한다."""
+    from server.db.connections import get_stocks_conn
+    from server.stock_storyline import build_storyline
+    import json as _json
+    conn = get_stocks_conn()
+    try:
+        sum_rows = conn.execute(
+            "SELECT summary_date, one_liner, drivers_json, tone "
+            "FROM stock_daily_summary WHERE code=%s AND status='ok' "
+            "ORDER BY summary_date DESC LIMIT 15",
+            (code,),
+        ).fetchall()
+        price_rows = conn.execute(
+            "SELECT date, close FROM price_daily WHERE code=%s "
+            "ORDER BY date DESC LIMIT 25",
+            (code,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    items = []
+    for r in sum_rows:
+        try:
+            drivers = _json.loads(r[2] or "[]")
+        except Exception:
+            drivers = []
+        items.append({
+            "summary_date": _jsonable(r[0]),
+            "one_liner": r[1] or "",
+            "drivers": drivers,
+            "tone": r[3] or "",
+        })
+    prices = [{"date": _jsonable(p[0]), "close": p[1]} for p in price_rows]
+
+    result = build_storyline(items, prices)
+    result["code"] = code
+    return result
+
+
 # [2026-05-18 정리] /api/themes/{theme_name}/context 핸들러 제거 —
 # part02_list_theme_market.py 의 @router.get("/api/themes/{theme_name:path}/context")
 # 가 먼저 등록되어 우선 매칭되므로 이 핸들러는 도달 불가능한 죽은 코드였음.

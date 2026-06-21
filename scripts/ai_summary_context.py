@@ -73,12 +73,34 @@ def collect_stock_context(con, code: str) -> dict[str, Any]:
             "div_5": row[4], "rs_score": row[5],
         }
 
+    # 어제(직전) 한 줄 요약 — 연재 연속성용. 오늘 쓰기 전 어제 이야기를 이어가도록.
+    row = cur.execute(
+        "SELECT summary_date, one_liner, drivers_json, tone FROM stock_daily_summary "
+        "WHERE code=%s AND status='ok' AND summary_date < %s "
+        "ORDER BY summary_date DESC LIMIT 1",
+        (code, _today_db()),
+    ).fetchone()
+    if row:
+        ctx["prev_summary"] = {
+            "date": row[0], "one_liner": row[1],
+            "drivers_json": row[2], "tone": row[3],
+        }
+
+    # 최근 공시 — 번역·임팩트·강도까지 (강한 공시를 one_liner 에 엮도록)
     rows = cur.execute(
-        "SELECT date, title FROM dart_disclosures "
-        "WHERE code=%s ORDER BY date DESC LIMIT 3",
+        "SELECT date, title, title_kor, summary_kor, impact, impact_strength "
+        "FROM dart_disclosures "
+        "WHERE code=%s ORDER BY date DESC LIMIT 5",
         (code,),
     ).fetchall()
-    ctx["dart_recent"] = [{"date": r[0], "title": r[1]} for r in rows]
+    ctx["dart_recent"] = [
+        {
+            "date": r[0], "title": r[1],
+            "title_kor": r[2], "summary_kor": r[3],
+            "impact": r[4], "impact_strength": r[5],
+        }
+        for r in rows
+    ]
 
     today = _today_db()
     rows = cur.execute(

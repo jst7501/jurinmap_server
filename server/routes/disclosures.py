@@ -245,8 +245,8 @@ def get_stock_disclosures(code: str, limit: int = Query(10, ge=1, le=50)):
         rows = conn.execute(
             """
             SELECT id, rcept_no, date, title, type,
-                   title_kor, summary_kor, impact, release_eta, translated_at,
-                   created_at
+                   title_kor, summary_kor, impact, impact_strength, release_eta,
+                   translated_at, created_at
             FROM dart_disclosures
             WHERE code = ?
             ORDER BY date DESC, id DESC
@@ -302,6 +302,7 @@ def get_stock_disclosures(code: str, limit: int = Query(10, ge=1, le=50)):
             "title_kor": d.get("title_kor"),
             "summary_kor": d.get("summary_kor"),
             "impact": d.get("impact"),
+            "impact_strength": d.get("impact_strength"),
             "release_eta": d.get("release_eta"),
             "translated": d.get("translated_at") is not None,
             "translated_at": str(d.get("translated_at") or "") or None,
@@ -313,6 +314,69 @@ def get_stock_disclosures(code: str, limit: int = Query(10, ge=1, le=50)):
         "warnings": warnings,
         "count": len(items),
         "items": items,
+    }
+
+
+@router.get("/disclosures/strong")
+def list_strong_disclosures(
+    days: int = Query(3, ge=1, le=14, description="최근 N일치 (기본 3일 — 주말 금→월 갭 커버)"),
+    min_strength: int = Query(2, ge=1, le=3, description="이 강도 이상만 (기본 2=중)"),
+    limit: int = Query(12, ge=1, le=40),
+):
+    """홈용 — 최근 N일 '강한 호재/악재' 공시. 거래대금 큰 종목 우선.
+
+    응답: {"as_of": "...", "positive": [...], "negative": [...]}
+      각 item: {code, name, date, title_kor, summary_kor, impact, impact_strength, trading_value}
+      - positive: impact='positive' (강한 호재)
+      - negative: impact IN ('negative','risk') (강한 악재·주의)
+    """
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+    conn = get_stocks_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT d.code, s.name, d.date, d.title_kor, d.summary_kor,
+                   d.impact, d.impact_strength, d.rcept_no,
+                   COALESCE(pt.trading_value, 0) AS tv
+            FROM dart_disclosures d
+            LEFT JOIN stocks s ON s.code = d.code
+            LEFT JOIN price_today pt ON pt.code = d.code
+            WHERE d.date >= ?
+              AND d.impact IN ('positive', 'negative', 'risk')
+              AND COALESCE(d.impact_strength, 0) >= ?
+              AND (d.title_kor IS NOT NULL AND d.title_kor <> '')
+            ORDER BY COALESCE(d.impact_strength, 0) DESC, tv DESC, d.id DESC
+            LIMIT ?
+            """,
+            (cutoff, min_strength, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    positive, negative = [], []
+    for r in rows:
+        d = dict(r) if hasattr(r, "keys") else {}
+        item = {
+            "code": d.get("code"),
+            "name": d.get("name"),
+            "date": str(d.get("date") or ""),
+            "title_kor": d.get("title_kor"),
+            "summary_kor": d.get("summary_kor"),
+            "impact": d.get("impact"),
+            "impact_strength": d.get("impact_strength"),
+            "rcept_no": d.get("rcept_no"),
+            "trading_value": d.get("tv"),
+        }
+        if d.get("impact") == "positive":
+            positive.append(item)
+        else:
+            negative.append(item)
+
+    return {
+        "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "positive": positive,
+        "negative": negative,
     }
 
 

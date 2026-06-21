@@ -265,6 +265,75 @@ def _safe_db_query(sql: str, params: tuple = ()) -> list[dict]:
         return []
 
 
+def _fetch_multiday_flow() -> dict:
+    """시장 전체 외국인·기관 일별 순매수 다일(多日) 컨텍스트.
+
+    "오늘 하루"가 아닌 며칠~몇 주 단위 큰 관점 — macro_context("요즘 흐름") 카피 근거.
+    investor_flow(종목별 일별)를 날짜로 합산. 단위: 억원.
+
+    반환:
+      {
+        "days": [{date, foreign_uk, institution_uk}, ...],  # 최신→과거 10일
+        "foreign":     {"streak_days": N, "streak_dir": "buy"|"sell", "sum_5d_uk": ..., "sum_20d_uk": ...},
+        "institution": {... 동일 ...},
+        "note": "..."
+      }
+    streak_days: 가장 최근 영업일부터 같은 방향(순매수/순매도)이 며칠 연속인지.
+    """
+    rows = _safe_db_query(
+        "SELECT date, "
+        "ROUND(SUM(COALESCE(foreign_net_amt,0))/100.0)::bigint AS frn_uk, "
+        "ROUND(SUM(COALESCE(institution_net_amt,0))/100.0)::bigint AS inst_uk "
+        "FROM investor_flow GROUP BY date ORDER BY date DESC LIMIT 20"
+    )
+    if not rows:
+        return {}
+
+    days = [
+        {
+            "date": str(r.get("date") or ""),
+            "foreign_uk": int(r.get("frn_uk") or 0),
+            "institution_uk": int(r.get("inst_uk") or 0),
+        }
+        for r in rows
+    ]
+
+    def _streak(values: list[int]) -> dict:
+        """values: 최신→과거. 가장 최근 같은 부호 run 길이 + 방향."""
+        if not values or values[0] == 0:
+            return {"streak_days": 0, "streak_dir": "flat"}
+        sign = 1 if values[0] > 0 else -1
+        n = 0
+        for v in values:
+            if (v > 0 and sign > 0) or (v < 0 and sign < 0):
+                n += 1
+            else:
+                break
+        return {"streak_days": n, "streak_dir": "buy" if sign > 0 else "sell"}
+
+    frn_vals = [d["foreign_uk"] for d in days]
+    inst_vals = [d["institution_uk"] for d in days]
+
+    out = {
+        "days": days[:10],
+        "foreign": {
+            **_streak(frn_vals),
+            "sum_5d_uk": sum(frn_vals[:5]),
+            "sum_20d_uk": sum(frn_vals[:20]),
+            "today_excluded": True,
+        },
+        "institution": {
+            **_streak(inst_vals),
+            "sum_5d_uk": sum(inst_vals[:5]),
+            "sum_20d_uk": sum(inst_vals[:20]),
+            "today_excluded": True,
+        },
+        "note": "investor_flow 일별 합산(억원). 오늘 장중은 미포함 — today_snapshot.flow_live 참조. "
+                "streak_days=가장 최근 영업일부터 같은 방향 연속일수.",
+    }
+    return out
+
+
 def _fetch_today_market_snapshot() -> dict:
     """오늘 KIS 신선 데이터 — 분석의 1차 source."""
     snapshot: dict = {}
@@ -410,12 +479,15 @@ def _fetch_today_fx_and_macros() -> dict:
 
 
 def _fetch_recent_disclosures_top() -> list[dict]:
-    """오늘 발표된 임팩트 큰 공시 (DART) — '갑자기 떨어진 이유' 후보."""
+    """오늘 발표된 임팩트 큰 공시 (DART) — '갑자기 떨어진 이유' 후보.
+    컬럼은 date(YYYYMMDD), 악재 vocab 은 negative/risk. 강한 것 우선."""
     today_str = datetime.now().strftime("%Y%m%d")
     rows = _safe_db_query(
-        "SELECT rcept_no, code, name, title, title_kor, summary_kor, impact, rcept_date "
-        "FROM dart_disclosures WHERE rcept_date = ? AND impact IN ('down','risk') "
-        "ORDER BY id DESC LIMIT 5",
+        "SELECT d.rcept_no, d.code, s.name, d.title, d.title_kor, d.summary_kor, "
+        "d.impact, d.impact_strength, d.date "
+        "FROM dart_disclosures d LEFT JOIN stocks s ON s.code = d.code "
+        "WHERE d.date = ? AND d.impact IN ('negative','risk') "
+        "ORDER BY COALESCE(d.impact_strength, 0) DESC, d.id DESC LIMIT 5",
         (today_str,),
     )
     return [
@@ -425,6 +497,7 @@ def _fetch_recent_disclosures_top() -> list[dict]:
             "title": r.get("title_kor") or r.get("title"),
             "summary": r.get("summary_kor"),
             "impact": r.get("impact"),
+            "strength": r.get("impact_strength"),
         }
         for r in rows
     ]
@@ -461,6 +534,11 @@ def build_brief_context(
           },
           "fx_macros": {...},                # 환율·유가·BTC
           "today_disclosures_down": [...],   # 오늘 악재 공시
+          "multiday_flow": {                 # 2026-05-29 다일 수급 — macro_context 근거
+            "foreign": {"streak_days": N, "streak_dir": "sell", "sum_5d_uk": ..., "sum_20d_uk": ...},
+            "institution": {...},
+            "days": [...]
+          },
           "fetched_at": "..."
         }
     """
@@ -473,6 +551,8 @@ def build_brief_context(
     overnight_us = _fetch_overnight_us_market()
     fx_macros = _fetch_today_fx_and_macros()
     today_disclosures_down = _fetch_recent_disclosures_top()
+    # 2026-05-29 — 다일 수급 컨텍스트 (외국인 N일 연속 매도 등 macro_context 근거)
+    multiday_flow = _fetch_multiday_flow()
 
     # recent_briefs 는 summary 잘라서 prompt 길이 절약 (각 500자)
     recent_compact = []
@@ -533,6 +613,8 @@ def build_brief_context(
         "overnight_us": overnight_us,
         "fx_macros": fx_macros,
         "today_disclosures_down": today_disclosures_down,
+        # 2026-05-29 — 다일 수급 (macro_context "요즘 흐름" 근거)
+        "multiday_flow": multiday_flow,
     }
 
 
