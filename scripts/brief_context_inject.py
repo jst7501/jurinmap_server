@@ -503,6 +503,58 @@ def _fetch_recent_disclosures_top() -> list[dict]:
     ]
 
 
+def _fetch_top_news(hours: int = 36, limit: int = 10) -> dict:
+    """최근 고신호 시장 뉴스 (news_events). 지정학·거시 대형 악재 누락 방지.
+
+    [배경] 2026-06-22 사용자 피드백 — 호르무즈 해협 폐쇄·미이란 긴장 등
+    대형 악재가 news_events 에 다 있는데 brief 가 전혀 안 읽어 도움이 안 됐음.
+
+    중립 제외, 악재 우선. 비슷한 헤드라인(알고 생성 중복多)은 토큰 겹침으로 dedup.
+    반환: {"items": [...], "count_neg": N, "count_pos": M, "window_h": hours}
+    """
+    cutoff = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = _safe_db_query(
+        "SELECT timestamp, headline, sentiment, theme, reason, sentiment_score "
+        "FROM news_events WHERE timestamp >= ? AND sentiment IN ('악재','호재') "
+        "ORDER BY (sentiment='악재') DESC, ABS(COALESCE(sentiment_score,0)) DESC, timestamp DESC "
+        "LIMIT 80",
+        (cutoff,),
+    )
+
+    def _toks(h: str) -> set:
+        return set(re.findall(r"[가-힣A-Za-z]{2,}", h or ""))
+
+    kept: list[dict] = []
+    count_neg = count_pos = 0
+    for r in rows:
+        sent = r.get("sentiment")
+        if sent == "악재":
+            count_neg += 1
+        elif sent == "호재":
+            count_pos += 1
+        h = r.get("headline") or ""
+        t = _toks(h)
+        # 이미 담은 헤드라인과 토큰 50%+ 겹치면 중복 — skip
+        if any(t and len(t & k["_t"]) / len(t) > 0.5 for k in kept):
+            continue
+        if len(kept) < limit:
+            kept.append({
+                "timestamp": str(r.get("timestamp"))[:16],
+                "headline": h,
+                "sentiment": sent,
+                "theme": r.get("theme"),
+                "reason": r.get("reason"),
+                "_t": t,
+            })
+    items = [{k: v for k, v in d.items() if k != "_t"} for d in kept]
+    return {
+        "items": items,
+        "count_neg": count_neg,
+        "count_pos": count_pos,
+        "window_h": hours,
+    }
+
+
 def build_brief_context(
     slot: str | None = None,
     days_back: int = 7,
@@ -553,6 +605,8 @@ def build_brief_context(
     today_disclosures_down = _fetch_recent_disclosures_top()
     # 2026-05-29 — 다일 수급 컨텍스트 (외국인 N일 연속 매도 등 macro_context 근거)
     multiday_flow = _fetch_multiday_flow()
+    # 2026-06-22 — 고신호 시장 뉴스 (지정학·거시 대형 악재 누락 방지)
+    top_news = _fetch_top_news()
 
     # recent_briefs 는 summary 잘라서 prompt 길이 절약 (각 500자)
     recent_compact = []
@@ -613,6 +667,8 @@ def build_brief_context(
         "overnight_us": overnight_us,
         "fx_macros": fx_macros,
         "today_disclosures_down": today_disclosures_down,
+        # 2026-06-22 — 고신호 시장 뉴스 (지정학·거시 대형 악재 — headline/bullet 의무 반영)
+        "top_news": top_news,
         # 2026-05-29 — 다일 수급 (macro_context "요즘 흐름" 근거)
         "multiday_flow": multiday_flow,
     }
